@@ -1,40 +1,50 @@
 import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from schema import EmailTriageResult
+from langchain_core.output_parsers import StrOutputParser
+from schema import TriageDescision
 from mock_data import MOCK_EMAILS
+from prompts import TRIAGE_PROMPT, DRAFTING_PROMPT
 
 load_dotenv()
 
-def build_triage_chain():
+def process_live_email(email_list):
     llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite")
-    
-    structured_llm = llm.with_structured_output(EmailTriageResult)
-    
-    prompt = ChatPromptTemplate.from_messages([("system", "You are an expert executive assistant. Triage the following email. If it is urgent, draft a brief, professional two-sentence reply."), ("human", "Sender: {sender}\nSubject: {subject}\nBody: {body}")])
-    
-    return prompt | structured_llm
 
-def manual_test():
-    print("Starting Phase 1 sandbox testing...")
-    chain = build_triage_chain()
     
-    for email in MOCK_EMAILS:
-        print(f"processing: '{email['subject']}'...")
-        result = chain.invoke({
+    triage_chain = TRIAGE_PROMPT | llm.with_structured_output(TriageDescision)
+    drafting_chain = DRAFTING_PROMPT | llm | StrOutputParser()
+    
+    final_results = []
+    
+    for email in email_list:
+        
+        body_snippet = email["body"][:200]
+        decision = triage_chain.invoke({
             "sender": email["sender"],
             "subject": email["subject"],
-            "body": email["body"]
+            "body_snippet": body_snippet
         })
-        print(f"Category: {result.category.upper()}")
-        print(f"Urgency : {result.urgency_score}/5")
-        if result.draft_reply:
-            print(f"Draft   : {result.draft_reply}")
-        print("-" * 50)
         
-if __name__ == "__main__":
-    manual_test()
+        draft = ""
+        if decision.category == "urgent":
+            print("   -> Urgent email detected. Drafting reply...")
+            draft = drafting_chain.invoke({
+                "sender": email["sender"],
+                "subject": email["subject"],
+                "body": email["body"]
+            })
+            
+        final_results.append({
+            "id": email["id"],
+            "sender": email["sender"],
+            "subject": email["subject"],
+            "category": decision.category,
+            "urgency": decision.urgency_score,
+            "draft": draft
+        })
+        
+    return final_results
     
     
 # "gemini-3.5-flash-lite",  # Primary model
